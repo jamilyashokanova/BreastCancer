@@ -1,0 +1,231 @@
+```{r library}
+library(readxl)
+library(dplyr)
+library(dummies)
+```
+```{r}
+#Loading dataset
+require(mlbench)
+data(BreastCancer)
+str(BreastCancer)
+summary(BreastCancer) #There are 16 NA in Bare.nuclei
+View(BreastCancer)
+```
+```{r}
+library(ggplot2)
+#See how the data is distributed
+barplot(summary(BreastCancer$Class))
+barplot(summary(BreastCancer$Cl.thickness))
+barplot(summary(BreastCancer$Cell.size))
+barplot(summary(BreastCancer$Cell.shape))
+barplot(summary(BreastCancer$Marg.adhesion))
+barplot(summary(BreastCancer$Epith.c.size))
+barplot(summary(BreastCancer$Bare.nuclei))
+barplot(summary(BreastCancer$Normal.nucleoli))
+barplot(summary(BreastCancer$Mitoses))
+
+```
+
+```{r}
+#Create new df
+BreastCancer.df<-BreastCancer
+
+#Convert to integers 
+BreastCancer.df$Cl.thickness<-as.integer(BreastCancer$Cl.thickness)
+BreastCancer.df$Mitoses<-as.integer(BreastCancer$Mitoses)
+BreastCancer.df$Cell.size<-as.integer(BreastCancer$Cell.size)
+BreastCancer.df$Cell.shape<-as.integer(BreastCancer$Cell.shape)
+BreastCancer.df$Marg.adhesion<-as.integer(BreastCancer$Marg.adhesion)
+BreastCancer.df$Epith.c.size<-as.integer(BreastCancer$Epith.c.size)
+BreastCancer.df$Bare.nuclei<-as.integer(BreastCancer$Bare.nuclei)
+BreastCancer.df$Bl.cromatin<-as.integer(BreastCancer$Bl.cromatin)
+BreastCancer.df$Normal.nucleoli<-as.integer(BreastCancer$Normal.nucleoli)
+BreastCancer.df$Class<-as.integer(BreastCancer$Class)
+
+#Find median of Bare nuclei
+median(BreastCancer.df$Bare.nuclei, na.rm=TRUE)
+
+#Replace NA with 1
+BreastCancer.df$Bare.nuclei[is.na(BreastCancer.df$Bare.nuclei)] = 1
+
+summary(BreastCancer.df)
+str(BreastCancer.df)
+```
+```{r}
+#Check for outliers
+boxplot(BreastCancer.df$Cl.thickness)
+boxplot(BreastCancer.df$Cell.size)
+boxplot(BreastCancer.df$Cell.shape)
+boxplot(BreastCancer.df$Marg.adhesion) #outliers
+boxplot(BreastCancer.df$Epith.c.size) #outliers
+boxplot(BreastCancer.df$Bare.nuclei)
+boxplot(BreastCancer.df$Bl.cromatin) #outliers
+boxplot(BreastCancer.df$Normal.nucleoli) #outliers
+boxplot(BreastCancer.df$Mitoses) #outliers
+```
+```{r}
+#To discard the outliers, we normalize the variables first
+library(dplyr)
+
+newdf <- BreastCancer.df %>%
+    mutate_if(is.numeric, scale)
+
+head(newdf)
+
+#remove duplicated rows (9 rows were removed)
+library(dplyr)
+newdf2 <- newdf %>% 
+  distinct(.keep_all = TRUE)
+
+#indicate outliers 
+out <- boxplot.stats(newdf2$Mitoses)$out
+out_ind <- which(newdf2$Mitoses %in% c(out))
+out_ind # it is a way too many outliers we make the decision to keep them
+```
+
+
+
+```{r}
+#rename variable
+newdf2$Diagnosis<- newdf2$Class
+#delete Class
+newdf2$Class <- NULL
+str(newdf2)
+
+#reorder
+newdf3 <- newdf2[c(11,2,4,5,6,7,8,9,10)]
+str(newdf3)
+
+newdf3$Diagnosis<-as.integer(newdf3$Diagnosis)
+
+# test the correlation between variables using correlation map
+library(corrplot)
+corr_map <- cor(newdf3[,3:ncol(newdf3)])
+corrplot(corr_map)
+
+```
+
+```{r}
+#data partitioning
+library(caTools)
+set.seed(123)
+sample= sample.split(newdf3$Diagnosis, SplitRatio=.70)
+traincancer=subset(newdf3, sample==TRUE)
+testcancer=subset(newdf3, sample==FALSE)
+
+str(traincancer)
+str(testcancer)
+```
+
+```{r}
+#svm
+library(e1071)
+mysvm <- svm(Diagnosis ~ ., traincancer)
+mysvm.pred <- predict(object = mysvm, newdata = testcancer, type = "class")
+t <- table(mysvm.pred,testcancer$Diagnosis)
+caret:: confusionMatrix(t)
+```
+
+```{r}
+#NB
+library(klaR)
+nb_mod <- NaiveBayes(Diagnosis ~ ., data=traincancer)
+pred <- predict(nb_mod, testcancer)
+# Confusion Matrix
+tab <- table(pred$class, testcancer$Diagnosis)
+caret::confusionMatrix(tab) 
+```
+
+```{r}
+#nnet
+library(nnet)
+mynnet <- nnet(Diagnosis ~ ., traincancer, size=1)
+mynnet.pred <- predict(mynnet,testcancer,type="class")
+t2 <- table(mynnet.pred,testcancer$Diagnosis)
+caret::confusionMatrix(t2) 
+```
+
+```{r}
+#Decision trees
+library(MASS)
+library(rpart)
+library(caret)
+mytree <- rpart(Diagnosis ~ ., traincancer)
+plot(mytree); text(mytree) # in "iris_tree.ps"
+summary(mytree)
+mytree.pred <- predict(mytree,testcancer,type="class")
+table(mytree.pred,testcancer$Diagnosis)
+confusionMatrix(mytree.pred, testcancer$Diagnosis)
+```
+
+```{r}
+# Leave-1-Out Cross Validation (LOOCV)
+ans <- numeric(length(testcancer[,1]))
+for (i in 1:length(testcancer[,1])) {
+  mytree <- rpart(Diagnosis~ ., traincancer[-i,])
+  mytree.pred <- predict(mytree,testcancer[i,],type="class")
+  ans[i] <- mytree.pred
+}
+ans <- factor(ans,labels=levels(testcancer$Diagnosis))
+t3 <- table(ans,testcancer$Diagnosis)
+caret::confusionMatrix(t3) 
+```
+
+```{r}
+#Quadratic Discriminant Analysis
+library(MASS)
+myqda <- qda(Diagnosis ~ ., traincancer)
+myqda.pred <- predict(myqda, testcancer)
+t4<- table(myqda.pred$class,testcancer$Diagnosis)
+caret::confusionMatrix(t4) 
+```
+
+```{r}
+#Regularised Discriminant Analysis
+library(klaR)
+myrda <- rda(Diagnosis ~ ., traincancer)
+myrda.pred <- predict(myrda, testcancer)
+t5 <-table(myrda.pred$class,testcancer$Diagnosis)
+caret::confusionMatrix(t5) 
+```
+
+```{r}
+#Random Forests
+install.packages("randomForest")
+library(randomForest)
+myrf <- randomForest(Diagnosis ~ .,traincancer)
+myrf.pred <- predict(myrf, testcancer)
+t6 <- table(myrf.pred, testcancer$Diagnosis)
+caret::confusionMatrix(t6) 
+```
+
+
+```{r}
+library(caretEnsemble)
+library(caret)
+library(nnet)
+library(e1071)
+## Set the seed for reproducibility
+seed<-12345
+set.seed(seed)
+
+# Define the training control
+trainControl <- trainControl(
+  method="repeatedcv",        #k-fold cross validation
+  number=10,                  #Number of folds
+  repeats=5,                  #Number of reapeting each fold
+  savePredictions="final",    #Saves predictions for optimal tuning parameter
+  classProbs=TRUE,            #should class probabilities be returned
+  allowParallel = TRUE        #Allow parallel computing, here core=4 is used
+  ) 
+#Model List
+algorithmList <- c("rpart","naive_bayes","nnet","svmLinear","qda", "rda", "rf")
+#Train model
+models <- caretList(Diagnosis~., data=traincancer, 
+          trControl = trainControl, preProcess=c("center","scale"),
+          methodList = algorithmList,metric = "Kappa")
+# Resamples and Summary of the models performances
+results <- resamples(models)
+summary(results)
+```
+
